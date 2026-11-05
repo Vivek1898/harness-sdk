@@ -279,16 +279,16 @@ class OpenAIModel(Model):
 
     @classmethod
     def _split_tool_message_images(cls, tool_message: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """Split a tool message into text-only tool message and optional user message with images.
+        """Split a tool message into a text-only tool message and an optional user message with attachments.
 
-        OpenAI API restricts images to user role messages only. This method extracts any image
-        content from a tool message and returns it separately as a user message.
+        OpenAI API restricts images and files to user role messages only. This method extracts any
+        image or document content from a tool message and returns it separately as a user message.
 
         Args:
-            tool_message: A formatted tool message that may contain images.
+            tool_message: A formatted tool message that may contain images or documents.
 
         Returns:
-            A tuple of (tool_message_without_images, user_message_with_images_or_None).
+            A tuple of (tool_message_without_attachments, user_message_with_attachments_or_None).
         """
         if tool_message.get("role") != "tool":
             return tool_message, None
@@ -297,32 +297,41 @@ class OpenAIModel(Model):
         if not isinstance(content, list):
             return tool_message, None
 
-        # Separate image and non-image content
+        # Separate attachments (images and documents) from the rest
         text_content = []
-        image_content = []
+        attachment_content = []
 
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "image_url":
-                image_content.append(item)
+            if isinstance(item, dict) and item.get("type") in ("image_url", "file"):
+                attachment_content.append(item)
             else:
                 text_content.append(item)
 
-        # If no images found, return original message
-        if not image_content:
+        # If no attachments found, return original message
+        if not attachment_content:
             return tool_message, None
+
+        kinds = []
+        if any(item.get("type") == "image_url" for item in attachment_content):
+            kinds.append("an image")
+        if any(item.get("type") == "file" for item in attachment_content):
+            kinds.append("a document")
+        returned = " and ".join(kinds)
 
         # Let the user know that we are modifying the messages for OpenAI compatibility
         logger.warning(
-            "tool_call_id=<%s> | Moving image from tool message to a new user message for OpenAI compatibility",
+            "tool_call_id=<%s> | Moving %s from tool message to a new user message for OpenAI compatibility",
             tool_message["tool_call_id"],
+            returned,
         )
 
-        # Append a message to the text content to inform the model about the upcoming image
+        # Append a message to the text content to inform the model about the upcoming attachment
+        follow_up = "They are" if len(kinds) > 1 else f"The {kinds[0].split()[1]} is"
         text_content.append(
             {
                 "type": "text",
                 "text": (
-                    "Tool successfully returned an image. The image is being provided in the following user message."
+                    f"Tool successfully returned {returned}. {follow_up} being provided in the following user message."
                 ),
             }
         )
@@ -334,10 +343,10 @@ class OpenAIModel(Model):
             "content": text_content,
         }
 
-        # Create user message with only images
-        user_message_with_images = {"role": "user", "content": image_content}
+        # Create user message with only the attachments
+        user_message_with_attachments = {"role": "user", "content": attachment_content}
 
-        return tool_message_clean, user_message_with_images
+        return tool_message_clean, user_message_with_attachments
 
     @classmethod
     def _format_request_tool_choice(cls, tool_choice: ToolChoice | None) -> dict[str, Any]:
@@ -437,9 +446,9 @@ class OpenAIModel(Model):
                 if "toolResult" in content
             ]
 
-            # Process tool messages to extract images into separate user messages
-            # OpenAI API requires images to be in user role messages only
-            # All tool messages must be grouped together before any user messages with images
+            # Process tool messages to extract images and documents into separate user messages
+            # OpenAI API requires images and files to be in user role messages only
+            # All tool messages must be grouped together before any user messages with attachments
             user_messages_with_images = []
             for tool_msg in formatted_tool_messages:
                 tool_msg_clean, user_msg_with_images = cls._split_tool_message_images(tool_msg)

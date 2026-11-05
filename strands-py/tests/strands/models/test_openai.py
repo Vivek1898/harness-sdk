@@ -426,6 +426,47 @@ def test_split_tool_message_images_with_image():
     assert user_with_image["content"][0]["type"] == "image_url"
 
 
+def test_split_tool_message_images_with_document():
+    """Test that documents are extracted from tool messages like images are."""
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "content": [
+            {"type": "text", "text": "Result"},
+            {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": "report"}},
+        ],
+    }
+
+    tool_clean, user_with_document = OpenAIModel._split_tool_message_images(tool_message)
+
+    assert tool_clean["role"] == "tool"
+    assert tool_clean["tool_call_id"] == "c1"
+    assert len(tool_clean["content"]) == 2
+    assert tool_clean["content"][0] == {"type": "text", "text": "Result"}
+    assert "Tool successfully returned a document" in tool_clean["content"][1]["text"]
+
+    assert user_with_document is not None
+    assert user_with_document["role"] == "user"
+    assert user_with_document["content"] == [tool_message["content"][1]]
+
+
+def test_split_tool_message_images_with_image_and_document():
+    """Test that an image and a document leave the tool message together, in order."""
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"}}
+    document = {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": "report"}}
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "content": [{"type": "text", "text": "Result"}, document, image],
+    }
+
+    tool_clean, user_with_attachments = OpenAIModel._split_tool_message_images(tool_message)
+
+    assert all(item["type"] == "text" for item in tool_clean["content"])
+    assert "Tool successfully returned an image and a document" in tool_clean["content"][1]["text"]
+    assert user_with_attachments == {"role": "user", "content": [document, image]}
+
+
 def test_split_tool_message_images_without_image():
     """Test that tool messages without images are unchanged."""
     tool_message = {"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": "Result"}]}
@@ -530,6 +571,43 @@ def test_format_request_messages_with_tool_result_containing_image():
     user_msg = formatted[tool_msg_idx + 1]
     assert user_msg["role"] == "user"
     assert any(c.get("type") == "image_url" for c in user_msg["content"])
+
+
+def test_format_request_messages_with_tool_result_containing_document():
+    """Test that a document a tool returns moves to a user message, as images do."""
+    messages = [
+        {"content": [{"text": "Summarize the report"}], "role": "user"},
+        {
+            "content": [{"toolUse": {"input": {}, "name": "fetch_report", "toolUseId": "c1"}}],
+            "role": "assistant",
+        },
+        {
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "c1",
+                        "status": "success",
+                        "content": [
+                            {"text": "Here is the report"},
+                            {"document": {"format": "pdf", "name": "report", "source": {"bytes": b"%PDF-1.4"}}},
+                        ],
+                    }
+                }
+            ],
+            "role": "user",
+        },
+    ]
+
+    formatted = OpenAIModel.format_request_messages(messages)
+
+    tool_messages = [msg for msg in formatted if msg.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    tool_msg = tool_messages[0]
+    assert all(c.get("type") != "file" for c in tool_msg["content"])
+
+    user_msg = formatted[formatted.index(tool_msg) + 1]
+    assert user_msg["role"] == "user"
+    assert [c["type"] for c in user_msg["content"]] == ["file"]
 
 
 def test_format_request_messages_with_multiple_images_in_tool_result():
