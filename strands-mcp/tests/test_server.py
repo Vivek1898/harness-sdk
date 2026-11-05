@@ -5,7 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
-from strands_mcp_server.server import fetch_doc, search_docs
+from urllib.error import URLError
+
+from strands_mcp_server.server import fetch_doc, main, search_docs
 from strands_mcp_server.utils.doc_fetcher import Page
 from strands_mcp_server.utils.indexer import Doc
 
@@ -190,3 +192,17 @@ class TestFetchDocErrors:
         tru_result = fetch_doc(uri="https://strandsagents.com/missing.md")
 
         assert tru_result["error"] == "fetch failed"
+
+
+@patch("strands_mcp_server.server.mcp")
+@patch("strands_mcp_server.server.cache")
+def test_main_starts_without_network(mock_cache, mock_mcp):
+    """#5860: the server must start and serve even when the docs host is
+    unreachable; the cache loads lazily on the first tool call, so main()
+    does not touch the network and never calls ensure_ready at startup."""
+    mock_cache.ensure_ready.side_effect = URLError("Temporary failure in name resolution")
+
+    main()
+
+    mock_cache.ensure_ready.assert_not_called()
+    mock_mcp.run.assert_called_once_with()

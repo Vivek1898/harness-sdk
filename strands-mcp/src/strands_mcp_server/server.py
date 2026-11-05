@@ -197,9 +197,10 @@ def fetch_doc(uri: str = "", section: str = "") -> Dict[str, Any]:
 def main() -> None:
     """Main entry point for the MCP server.
 
-    Initializes the document cache and starts the FastMCP server.
-    The cache is loaded with document titles only for fast startup,
-    with full content fetched on-demand.
+    Starts the FastMCP server. The document cache loads lazily on the first
+    tool call (both tools call cache.ensure_ready, which is idempotent), so
+    the server starts and answers initialize and tools/list even with no
+    network. A tool call then reports if the docs cannot be reached, instead
+    of the whole server failing to start (#5860).
     """
-    cache.ensure_ready()
     mcp.run()
